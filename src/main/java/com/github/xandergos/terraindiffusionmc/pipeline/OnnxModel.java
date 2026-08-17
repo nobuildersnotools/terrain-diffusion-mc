@@ -147,7 +147,7 @@ public final class OnnxModel implements AutoCloseable {
      * Loads model sessions for the active inference device configuration.
      */
     private void initializeModelSession(byte[] modelBytes, long startMillis) throws OrtException {
-        if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
+        if ("cpu".equals(TerrainDiffusionConfig.inferenceBackend())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             this.cpuSession = env.createSession(modelBytes, sessionOptions);
@@ -296,28 +296,31 @@ public final class OnnxModel implements AutoCloseable {
     }
 
     private static void addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
-        boolean gpuRequired = "gpu".equals(TerrainDiffusionConfig.inferenceDevice());
+        String requestedBackend = TerrainDiffusionConfig.inferenceBackend();
+        boolean gpuRequired = !"auto".equals(requestedBackend);
         boolean added = false;
 
-        try {
-            OrtCUDAProviderOptions cudaOpts = new OrtCUDAProviderOptions(0);
-            // Only grow the BFC arena by exactly what is needed, never pre-allocate.
-            cudaOpts.add("arena_extend_strategy", "kSameAsRequested");
-            // Heuristic: fast startup, no exhaustive benchmarking, workspace-efficient.
-            cudaOpts.add("cudnn_conv_algo_search", "HEURISTIC");
-            cudaOpts.add("do_copy_in_default_stream", "1");
-            opts.addCUDA(cudaOpts);
-            cudaOpts.close();
-            added = true;
-            setResolvedProviderOnce("CUDA");
-        } catch (Throwable t) {
-            if (cudaWarnLoggedOnce.compareAndSet(false, true)) {
-                LOG.warn("CUDA not available: {} - {}. This is expected if you are not using a CUDA build.",
-                        t.getClass().getSimpleName(), t.getMessage());
+        if (!"directml".equals(requestedBackend) && !"coreml".equals(requestedBackend)) {
+            try {
+                OrtCUDAProviderOptions cudaOpts = new OrtCUDAProviderOptions(0);
+                // Only grow the BFC arena by exactly what is needed, never pre-allocate.
+                cudaOpts.add("arena_extend_strategy", "kSameAsRequested");
+                // Heuristic: fast startup, no exhaustive benchmarking, workspace-efficient.
+                cudaOpts.add("cudnn_conv_algo_search", "HEURISTIC");
+                cudaOpts.add("do_copy_in_default_stream", "1");
+                opts.addCUDA(cudaOpts);
+                cudaOpts.close();
+                added = true;
+                setResolvedProviderOnce("CUDA");
+            } catch (Throwable t) {
+                if (cudaWarnLoggedOnce.compareAndSet(false, true)) {
+                    LOG.warn("CUDA not available: {} - {}. This is expected if you are not using a CUDA build.",
+                            t.getClass().getSimpleName(), t.getMessage());
+                }
             }
         }
 
-        if (!added) {
+        if (!added && !"cuda".equals(requestedBackend) && !"coreml".equals(requestedBackend)) {
             try {
                 opts.addDirectML(0);
                 added = true;
@@ -330,7 +333,7 @@ public final class OnnxModel implements AutoCloseable {
             }
         }
 
-        if (!added) {
+        if (!added && !"cuda".equals(requestedBackend) && !"directml".equals(requestedBackend)) {
             try {
                 // ENABLE_ON_SUBGRAPH: allow CoreML to handle partial graphs with CPU fallback
                 // for unsupported ops, maximising GPU utilisation without requiring full-graph support.
@@ -346,8 +349,8 @@ public final class OnnxModel implements AutoCloseable {
         }
         if (gpuRequired && !added) {
             throw new OrtException(
-                    "inference.device=gpu but no GPU provider (CUDA, DirectML, CoreML) is available. " +
-                    "Use the appropriate build for your platform or set inference.device=cpu.");
+                    "Requested inference backend '" + requestedBackend +
+                            "' is not available. Use the appropriate build for your platform or select auto/cpu.");
         }
         if (!added) {
             setResolvedProviderOnce("CPU");

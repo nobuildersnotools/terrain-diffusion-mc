@@ -31,6 +31,20 @@ public final class TerrainDiffusionConfig {
 
     /** Inference device: "cpu", "gpu", or "auto" (try GPU then fall back to CPU). */
     public static String inferenceDevice() {
+        return inferenceBackend();
+    }
+
+    /**
+     * Returns the requested inference backend. Besides the configuration values
+     * {@code cpu}, {@code gpu}, and {@code auto}, command-line tools may select
+     * a specific GPU provider with {@code -Dterrain-diffusion.backend=}.
+     */
+    public static String inferenceBackend() {
+        String override = System.getProperty("terrain-diffusion.backend");
+        if (override != null && !override.isBlank()) {
+            return normalizeBackend(override);
+        }
+
         String device = readString("inference.device", "gpu");
         // On the CPU build "gpu" is meaningless (no dedicated GPU provider), so treat it as "auto":
         // tries CoreML on macOS, falls back to CPU elsewhere.
@@ -38,6 +52,19 @@ public final class TerrainDiffusionConfig {
             return "auto";
         }
         return device;
+    }
+
+    private static String normalizeBackend(String backend) {
+        String normalized = backend.trim().toLowerCase();
+        if ("dml".equals(normalized)) {
+            normalized = "directml";
+        }
+        return switch (normalized) {
+            case "cpu", "gpu", "auto", "cuda", "directml", "coreml" -> normalized;
+            default -> throw new IllegalArgumentException(
+                    "Unknown terrain-diffusion backend '" + backend +
+                            "'. Expected cpu, cuda, directml, coreml, gpu, or auto.");
+        };
     }
 
     /** Whether to offload inactive models from VRAM between pipeline stages. */

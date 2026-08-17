@@ -165,6 +165,31 @@ task pipelineTest(type: JavaExec, dependsOn: compileJava) {
     jvmArgs '-Xmx8g'
 }
 
+task benchmarkPipeline(type: JavaExec, dependsOn: compileJava) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.github.xandergos.terraindiffusionmc.pipeline.PipelineBenchmark'
+    jvmArgs '-Xmx8g'
+
+    [
+            backend: 'benchmarkBackend',
+            tasks: 'benchmarkTasks',
+            warmup: 'benchmarkWarmup',
+            regionSize: 'benchmarkRegionSize',
+            seed: 'benchmarkSeed',
+            climate: 'benchmarkClimate',
+            output: 'benchmarkOutput',
+            help: 'benchmarkHelp'
+    ].each { argumentName, propertyName ->
+        if (project.hasProperty(propertyName)) {
+            if (argumentName != 'help' || project.property(propertyName).toString().toBoolean()) {
+                args argumentName == 'help'
+                        ? '--help'
+                        : "--${argumentName}=${project.property(propertyName)}"
+            }
+        }
+    }
+}
+
 tasks.register('generateModelAssetManifest') {
     inputs.property('modelRepositorySlug', modelRepositorySlug)
     inputs.property('modelRepositoryRevision', modelRepositoryRevision)

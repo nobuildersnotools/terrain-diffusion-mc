@@ -130,6 +130,23 @@ Build all:
 ./gradlew buildAll
 ```
 
+### Benchmarking inference backends
+
+`benchmarkPipeline` runs a configurable number of uncached pipeline regions and reports model-load time, per-task latency, throughput, and newly computed tensor windows. Choose a build variant that contains the backend you want to measure, then pass the backend and task count:
+
+```
+# CPU inference (including on macOS, where this forces CPU instead of CoreML)
+./gradlew benchmarkPipeline -PuseCpu=true -PbenchmarkBackend=cpu -PbenchmarkTasks=10
+
+# CUDA inference
+./gradlew benchmarkPipeline -PuseCuda=true -PbenchmarkBackend=cuda -PbenchmarkTasks=10
+
+# DirectML inference
+./gradlew benchmarkPipeline -PuseDml=true -PbenchmarkBackend=directml -PbenchmarkTasks=10
+```
+
+Supported backends are `cpu`, `cuda`, `directml` (or `dml`), `coreml`, `gpu`, and `auto`. Specific GPU backends fail if unavailable; `gpu` picks the first available GPU backend and `auto` may fall back to CPU. Optional properties are `benchmarkWarmup`, `benchmarkRegionSize`, `benchmarkSeed`, `benchmarkClimate`, `benchmarkOutput` (a JSON report path), and `benchmarkHelp=true`.
+
 ### Building onnxruntime with DirectML
 
 **Requirements**
