@@ -44,6 +44,7 @@ loom {
     runs {
         configureEach {
             ideConfigGenerated true
+            vmArg '--add-modules=jdk.incubator.vector'
         }
     }
 }
@@ -112,6 +113,7 @@ tasks.withType(JavaCompile).configureEach {
     // see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
     // If Javadoc is generated, this must be specified in that task too.
     it.options.encoding = "UTF-8"
+    it.options.compilerArgs += ['--add-modules', 'jdk.incubator.vector']
     if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
         it.options.release.set(targetJavaVersion)
     }
@@ -139,7 +141,12 @@ jar {
 }
 
 tasks.withType(JavaExec).configureEach {
+    jvmArgs '--add-modules=jdk.incubator.vector'
     systemProperty 'log4j2.configurationFile', rootProject.file('log4j2-dev.xml').absolutePath
+}
+
+tasks.withType(Test).configureEach {
+    jvmArgs '--add-modules=jdk.incubator.vector'
 }
 
 // configure the maven publication
@@ -164,6 +171,8 @@ task pipelineTest(type: JavaExec, dependsOn: compileJava) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.github.xandergos.terraindiffusionmc.pipeline.PipelineTest'
     jvmArgs '-Xmx8g'
+    systemProperty 'terrain-diffusion.models-dir',
+            project.findProperty('benchmarkModelDirectory') ?: rootProject.file('run/terrain-diffusion-models').absolutePath
 }
 
 task benchmarkPipeline(type: JavaExec, dependsOn: compileJava) {
@@ -175,7 +184,7 @@ task benchmarkPipeline(type: JavaExec, dependsOn: compileJava) {
             backend: 'benchmarkBackend',
             tasks: 'benchmarkTasks',
             warmup: 'benchmarkWarmup',
-            regionSize: 'benchmarkRegionSize',
+            'region-size': 'benchmarkRegionSize',
             seed: 'benchmarkSeed',
             climate: 'benchmarkClimate',
             output: 'benchmarkOutput',
@@ -189,6 +198,8 @@ task benchmarkPipeline(type: JavaExec, dependsOn: compileJava) {
             }
         }
     }
+    systemProperty 'terrain-diffusion.models-dir',
+            project.findProperty('benchmarkModelDirectory') ?: rootProject.file('run/terrain-diffusion-models').absolutePath
 }
 
 tasks.register('generateModelAssetManifest') {

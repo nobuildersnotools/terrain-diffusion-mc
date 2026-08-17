@@ -28,6 +28,14 @@ Use the `-cuda` build only if you are on Linux, or have an NVIDIA GPU and prefer
 - VRAM (GPU RAM) needed: 1.5GB
 - RAM needed: 2.5GB (May need to increase Minecraft's RAM allocation)
 
+The mod uses the JDK Vector API for SIMD-accelerated terrain pipeline math. Add the following JVM argument to the Minecraft instance:
+
+```text
+--add-modules=jdk.incubator.vector
+```
+
+Gradle development, test, and benchmark tasks add this argument automatically.
+
 ## Usage
 
 **If using CUDA build:** First see [CUDA_INSTALL.md](CUDA_INSTALL.md).

@@ -19,9 +19,7 @@ public final class LaplacianUtils {
         int H = residual.length, W = residual[0].length;
         float[][] lowresUp = bilinearResize(lowres, H, W);
         float[][] result = new float[H][W];
-        for (int r = 0; r < H; r++)
-            for (int c = 0; c < W; c++)
-                result[r][c] = residual[r][c] + lowresUp[r][c];
+        for (int r = 0; r < H; r++) VectorMath.add(residual[r], lowresUp[r], result[r], W);
         return result;
     }
 
@@ -38,9 +36,7 @@ public final class LaplacianUtils {
         // Step 1: decode with extrapolation
         float[][] lowresUpEx = bilinearResizeExtrapolated(lowres, H, W);
         float[][] decoded = new float[H][W];
-        for (int r = 0; r < H; r++)
-            for (int c = 0; c < W; c++)
-                decoded[r][c] = residual[r][c] + lowresUpEx[r][c];
+        for (int r = 0; r < H; r++) VectorMath.add(residual[r], lowresUpEx[r], decoded[r], W);
 
         // Step 2: laplacian_encode(decoded, lW, sigma)
         // = downsample to (lH, lW), blur, return blurred as new_lowres
@@ -140,29 +136,11 @@ public final class LaplacianUtils {
 
         // Horizontal pass
         float[][] tmp = new float[H][W];
-        for (int r = 0; r < H; r++) {
-            for (int c = 0; c < W; c++) {
-                float sum = 0;
-                for (int ki = 0; ki < ks; ki++) {
-                    int cc = Math.max(0, Math.min(W - 1, c + ki - pad));
-                    sum += src[r][cc] * k[ki];
-                }
-                tmp[r][c] = sum;
-            }
-        }
+        for (int r = 0; r < H; r++) VectorMath.horizontalConvolution(src[r], k, pad, tmp[r]);
 
         // Vertical pass
         float[][] result = new float[H][W];
-        for (int r = 0; r < H; r++) {
-            for (int c = 0; c < W; c++) {
-                float sum = 0;
-                for (int ki = 0; ki < ks; ki++) {
-                    int rr = Math.max(0, Math.min(H - 1, r + ki - pad));
-                    sum += tmp[rr][c] * k[ki];
-                }
-                result[r][c] = sum;
-            }
-        }
+        for (int r = 0; r < H; r++) VectorMath.verticalConvolution(tmp, k, r, pad, result[r]);
         return result;
     }
 

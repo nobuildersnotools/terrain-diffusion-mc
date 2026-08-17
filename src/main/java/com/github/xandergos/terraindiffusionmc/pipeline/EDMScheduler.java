@@ -62,7 +62,7 @@ public final class EDMScheduler {
     /** c_in scaling: sample / sqrt(sigma^2 + sigma_data^2). */
     public static void preconditionInputsInPlace(float[] sample, float sigma) {
         float cIn = 1.0f / (float) Math.sqrt(sigma * sigma + SIGMA_DATA * SIGMA_DATA);
-        for (int i = 0; i < sample.length; i++) sample[i] *= cIn;
+        VectorMath.scaleInPlace(sample, cIn);
     }
 
     public static float[] preconditionInputs(float[] sample, float sigma) {
@@ -87,9 +87,7 @@ public final class EDMScheduler {
         float cSkip = sd2 / (sig2 + sd2);
         float cOut = sigma * SIGMA_DATA / (float) Math.sqrt(sig2 + sd2);
         float[] x0 = new float[sample.length];
-        for (int i = 0; i < sample.length; i++) {
-            x0[i] = cSkip * sample[i] + cOut * modelOut[i];
-        }
+        VectorMath.linearCombination(sample, 0, cSkip, modelOut, 0, cOut, x0, 0, sample.length);
         return x0;
     }
 
@@ -136,9 +134,8 @@ public final class EDMScheduler {
     private static float[] firstOrderUpdate(float[] x0Pred, float[] sample, float sigmaS, float sigmaT) {
         float ratio = sigmaT / sigmaS;  // exp(-h) = sigma_t / sigma_s
         float[] xt = new float[sample.length];
-        for (int i = 0; i < sample.length; i++) {
-            xt[i] = ratio * sample[i] - (ratio - 1.0f) * x0Pred[i];
-        }
+        VectorMath.scaledDifference(sample, 0, ratio, x0Pred, 0, ratio - 1.0f,
+                xt, 0, sample.length);
         return xt;
     }
 
@@ -162,10 +159,7 @@ public final class EDMScheduler {
         float d0Coeff  = -(expNH - 1.0f);
         float d1Coeff  = -0.5f * (expNH - 1.0f);
         float[] xt = new float[sample.length];
-        for (int i = 0; i < sample.length; i++) {
-            float d1 = (m0[i] - m1[i]) / r0;
-            xt[i] = sCoeff * sample[i] + d0Coeff * m0[i] + d1Coeff * d1;
-        }
+        VectorMath.secondOrder(m1, m0, sample, r0, sCoeff, d0Coeff, d1Coeff, xt);
         return xt;
     }
 

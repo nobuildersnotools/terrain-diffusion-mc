@@ -124,93 +124,106 @@ public final class WorldPipeline implements AutoCloseable {
         int S = COARSE_TILE_SIZE, ST = COARSE_TILE_STRIDE;
         float[] ww = linearWeightWindow(S);
         TensorWindow outWin = new TensorWindow(new int[]{7, S, S}, new int[]{7, ST, ST});
-        return tileStore.getOrCreate("base_coarse_map", new Integer[]{7, null, null},
-                (wi, args) -> coarseTile(wi, ww), outWin,
-                new InfiniteTensor[]{}, new TensorWindow[]{}, cacheLimitBytes);
+        return tileStore.getOrCreateBatched("base_coarse_map", new Integer[]{7, null, null},
+                (wis, args) -> coarseBatch(wis, ww), outWin,
+                new InfiniteTensor[]{}, new TensorWindow[]{}, cacheLimitBytes, 2);
     }
 
-    private FloatTensor coarseTile(int[] wi, float[] ww) {
+    private List<FloatTensor> coarseBatch(List<int[]> wis, float[] ww) {
         int S = COARSE_TILE_SIZE, ST = COARSE_TILE_STRIDE;
-        int i = wi[1], j = wi[2];
-        int i1 = i * ST, j1 = j * ST;
-
-        // Synthetic map conditioning: channels [elev_sqrt, temp, tempStd, precip, precipStd]
-        // Python call: synthetic_map_factory(j1, i1, j2, i2)
-        // Coordinates are intentionally swapped
-        float[][][] syn = syntheticMapFactory.sample(j1, i1, j1 + S, i1 + S);
-
-        // Modify temp channel (index 1): where <= 20, scale toward 20
-        for (int r = 0; r < S; r++)
-            for (int c = 0; c < S; c++) {
-                float v = syn[1][r][c];
-                if (v <= 20f) syn[1][r][c] = (v - 20f) * 1.25f + 20f;
-            }
-
-        // Normalize with MODEL_MEANS/STDS indices [0,2,3,4,5]
-        int[] meanIdx = {0, 2, 3, 4, 5};
-        float[] condImg = new float[5 * S * S];
-        for (int ch = 0; ch < 5; ch++) {
-            float mean = MODEL_MEANS[meanIdx[ch]], std = MODEL_STDS[meanIdx[ch]];
-            for (int px = 0; px < S * S; px++)
-                condImg[ch * S * S + px] = (syn[ch][px / S][px % S] - mean) / std;
-        }
-
-        // Conditioning noise: Gaussian noise (5, S, S)
-        float[] condNoise = flatten3D(GaussianNoisePatch.generate(seed, i1, j1, S, S, 5, S, S));
-
-        // cond_img_mixed = cos(t_cond) * normalized + sin(t_cond) * noise
-        float[] condMixed = new float[5 * S * S];
-        for (int ch = 0; ch < 5; ch++) {
-            float cosT = (float) Math.cos(Math.atan(COND_SNR[ch]));
-            float sinT = (float) Math.sin(Math.atan(COND_SNR[ch]));
-            for (int px = 0; px < S * S; px++) {
-                condMixed[ch * S * S + px] = cosT * condImg[ch * S * S + px]
-                        + sinT * condNoise[ch * S * S + px];
-            }
-        }
-
-        // Initial sample: (6, S, S) noise * sigma_max
+        int pixels = S * S;
+        int batch = wis.size();
+        float[] condMixedBatch = new float[batch * 5 * pixels];
+        float[] sampleBatch = new float[batch * 6 * pixels];
         EDMScheduler sched = new EDMScheduler(20);
-        float[] sample = flatten3D(GaussianNoisePatch.generate(seed + 1, i1, j1, S, S, 6, S, S));
-        for (int k = 0; k < sample.length; k++) sample[k] *= sched.sigmas[0];
+
+        for (int b = 0; b < batch; b++) {
+            int[] wi = wis.get(b);
+            int i1 = wi[1] * ST, j1 = wi[2] * ST;
+
+            // Synthetic map conditioning: channels [elev_sqrt, temp, tempStd, precip, precipStd]
+            // Python call: synthetic_map_factory(j1, i1, j2, i2); coordinates are intentionally swapped
+            float[][][] syn = syntheticMapFactory.sample(j1, i1, j1 + S, i1 + S);
+
+            // Modify temp channel (index 1): where <= 20, scale toward 20
+            for (int r = 0; r < S; r++) VectorMath.adjustAtMostInPlace(syn[1][r], 20.0f, 1.25f);
+
+            // Normalize with MODEL_MEANS/STDS indices [0,2,3,4,5]
+            int[] meanIdx = {0, 2, 3, 4, 5};
+            float[] condImg = new float[5 * pixels];
+            for (int ch = 0; ch < 5; ch++) {
+                float mean = MODEL_MEANS[meanIdx[ch]], std = MODEL_STDS[meanIdx[ch]];
+                for (int r = 0; r < S; r++) {
+                    VectorMath.normalize(syn[ch][r], 0, mean, std,
+                            condImg, ch * pixels + r * S, S);
+                }
+            }
+
+            // cond_img_mixed = cos(t_cond) * normalized + sin(t_cond) * noise
+            float[] condNoise = flatten3D(GaussianNoisePatch.generate(seed, i1, j1, S, S, 5, S, S));
+            int condOffset = b * 5 * pixels;
+            for (int ch = 0; ch < 5; ch++) {
+                float cosT = (float) Math.cos(Math.atan(COND_SNR[ch]));
+                float sinT = (float) Math.sin(Math.atan(COND_SNR[ch]));
+                int channelOffset = ch * pixels;
+                VectorMath.linearCombination(condImg, channelOffset, cosT,
+                        condNoise, channelOffset, sinT,
+                        condMixedBatch, condOffset + channelOffset, pixels);
+            }
+
+            // Initial sample: (6, S, S) noise * sigma_max
+            float[] sample = flatten3D(GaussianNoisePatch.generate(seed + 1, i1, j1, S, S, 6, S, S));
+            int sampleOffset = b * 6 * pixels;
+            VectorMath.scale(sample, 0, sched.sigmas[0], sampleBatch, sampleOffset, sample.length);
+        }
 
         // 20-step DPM-Solver++
-        float[][] condInputs = new float[5][1];
+        float[][] condInputs = new float[5][batch];
         long[][] condShapes  = new long[5][1];
-        for (int ci = 0; ci < 5; ci++) { condInputs[ci] = new float[]{COND_VALS[ci]}; condShapes[ci] = new long[]{1}; }
+        for (int ci = 0; ci < 5; ci++) {
+            for (int b = 0; b < batch; b++) condInputs[ci][b] = COND_VALS[ci];
+            condShapes[ci] = new long[]{batch};
+        }
 
-        LOG.debug("Coarse model called for chunk ({}, {}) tile pixels [{}, {}]-[{}, {}] (20 steps)", i, j, i1, j1, i1 + S, j1 + S);
+        String chunkList = wis.stream().map(w -> "(" + w[1] + "," + w[2] + ")").collect(Collectors.joining(", "));
+        LOG.debug("Coarse model called for {} chunks: {} (20 steps)", batch, chunkList);
         for (int step = 0; step < 20; step++) {
             float sigma  = sched.sigmas[step];
             float cnoise = EDMScheduler.trigflowPreconditionNoise(sigma);
-            float[] scaledIn = EDMScheduler.preconditionInputs(sample, sigma);
+            float cIn = 1.0f / (float) Math.sqrt(sigma * sigma + SIGMA_DATA * SIGMA_DATA);
+            float[] xIn = new float[batch * 11 * pixels];
+            for (int b = 0; b < batch; b++) {
+                int sampleOffset = b * 6 * pixels;
+                int inputOffset = b * 11 * pixels;
+                VectorMath.scale(sampleBatch, sampleOffset, cIn, xIn, inputOffset, 6 * pixels);
+                System.arraycopy(condMixedBatch, b * 5 * pixels, xIn, inputOffset + 6 * pixels, 5 * pixels);
+            }
 
-            float[] xIn = new float[11 * S * S];
-            System.arraycopy(scaledIn, 0, xIn, 0, 6 * S * S);
-            System.arraycopy(condMixed, 0, xIn, 6 * S * S, 5 * S * S);
-
+            float[] noiseLabels = new float[batch];
+            for (int b = 0; b < batch; b++) noiseLabels[b] = cnoise;
             float[] modelOut = coarseModel.runModel(
-                    xIn, new long[]{1, 11, S, S}, new float[]{cnoise}, condInputs, condShapes);
-            sample = sched.step(modelOut, sample);
+                    xIn, new long[]{batch, 11, S, S}, noiseLabels, condInputs, condShapes);
+            sampleBatch = sched.step(modelOut, sampleBatch);
         }
 
-        // Denormalize: sample / sigma_data → raw, then * STDS + MEANS
-        float[] out = new float[6 * S * S];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < S * S; px++)
-                out[ch * S * S + px] = (sample[ch * S * S + px] / SIGMA_DATA) * MODEL_STDS[ch] + MODEL_MEANS[ch];
+        List<FloatTensor> results = new ArrayList<>(batch);
+        for (int b = 0; b < batch; b++) {
+            int sampleOffset = b * 6 * pixels;
+            float[] out = new float[6 * pixels];
+            for (int ch = 0; ch < 6; ch++) {
+                VectorMath.affineAfterDivide(sampleBatch, sampleOffset + ch * pixels, SIGMA_DATA,
+                        MODEL_STDS[ch], MODEL_MEANS[ch], out, ch * pixels, pixels);
+            }
+            VectorMath.subtract(out, 0, out, pixels, out, pixels, pixels);
 
-        // ch1 = ch0 - ch1 (convert to p5)
-        for (int px = 0; px < S * S; px++)
-            out[S * S + px] = out[px] - out[S * S + px];
-
-        // Output: (7, S, S) = [6 channels * weight | weight]
-        FloatTensor result = new FloatTensor(new int[]{7, S, S});
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < S * S; px++)
-                result.data[ch * S * S + px] = out[ch * S * S + px] * ww[px];
-        System.arraycopy(ww, 0, result.data, 6 * S * S, S * S);
-        return result;
+            FloatTensor result = new FloatTensor(new int[]{7, S, S});
+            for (int ch = 0; ch < 6; ch++) {
+                VectorMath.multiply(out, ch * pixels, ww, 0, result.data, ch * pixels, pixels);
+            }
+            System.arraycopy(ww, 0, result.data, 6 * pixels, pixels);
+            results.add(result);
+        }
+        return results;
     }
 
     // =========================================================================
@@ -263,25 +276,21 @@ public final class WorldPipeline implements AutoCloseable {
             float[] sample = new float[5 * S * S];
             if (prevSamples != null) {
                 FloatTensor ps = prevSamples.get(b);
-                for (int ch = 0; ch < 5; ch++)
-                    for (int px = 0; px < S * S; px++) {
-                        float w = ps.data[5 * S * S + px];
-                        sample[ch * S * S + px] = (w > 1e-6f) ? ps.data[ch * S * S + px] / w * SIGMA_DATA : 0f;
-                    }
+                for (int ch = 0; ch < 5; ch++) {
+                    VectorMath.divideMultiplyWhereGreater(ps.data, ch * S * S,
+                            ps.data, 5 * S * S, 1e-6f, SIGMA_DATA,
+                            sample, ch * S * S, S * S);
+                }
             }
 
             // z = noise * sigma_data; x_t = cos(t)*sample + sin(t)*z
             float[] noise = flatten3D(GaussianNoisePatch.generate(seed + seedOffset, i1, j1, S, S, 5, S, S));
             float[] xT = new float[5 * S * S];
-            for (int k = 0; k < 5 * S * S; k++) {
-                float z = noise[k] * SIGMA_DATA;
-                xT[k] = cosT * sample[k] + sinT * z;
-            }
+            VectorMath.noiseMix(sample, noise, cosT, sinT, SIGMA_DATA, xT);
             xTArr[b] = xT;
 
             // model_in = xT / sigma_data
-            for (int k = 0; k < 5 * S * S; k++)
-                modelInBatch[b * 5 * S * S + k] = xT[k] / SIGMA_DATA;
+            VectorMath.divide(xT, 0, SIGMA_DATA, modelInBatch, b * 5 * S * S, 5 * S * S);
         }
 
         String chunkList = wis.stream().map(w -> "(" + w[1] + "," + w[2] + ")").collect(Collectors.joining(", "));
@@ -299,15 +308,14 @@ public final class WorldPipeline implements AutoCloseable {
         for (int b = 0; b < batch; b++) {
             float[] xT = xTArr[b];
             float[] newSample = new float[5 * S * S];
-            for (int k = 0; k < 5 * S * S; k++) {
-                float pred = -predBatch[b * 5 * S * S + k];  // base model output is negated
-                newSample[k] = (cosT * xT[k] - sinT * SIGMA_DATA * pred) / SIGMA_DATA;
-            }
+            VectorMath.flowDenoise(xT, 0, predBatch, b * 5 * S * S,
+                    cosT, sinT * SIGMA_DATA, SIGMA_DATA, newSample, 0, 5 * S * S);
 
             FloatTensor out = new FloatTensor(new int[]{6, S, S});
-            for (int ch = 0; ch < 5; ch++)
-                for (int px = 0; px < S * S; px++)
-                    out.data[ch * S * S + px] = newSample[ch * S * S + px] * ww[px];
+            for (int ch = 0; ch < 5; ch++) {
+                VectorMath.multiply(newSample, ch * S * S, ww, 0,
+                        out.data, ch * S * S, S * S);
+            }
             System.arraycopy(ww, 0, out.data, 5 * S * S, S * S);
             results.add(out);
         }
@@ -319,11 +327,11 @@ public final class WorldPipeline implements AutoCloseable {
         int N = 4 * 4;
         // Unnormalize: cond[:-1] / cond[-1] for each pixel
         float[] condFlat = new float[6 * N];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < N; px++) {
-                float w = coarseSlice.data[6 * N + px];
-                condFlat[ch * N + px] = (w > 1e-6f) ? coarseSlice.data[ch * N + px] / w : 0f;
-            }
+        for (int ch = 0; ch < 6; ch++) {
+            VectorMath.divideMultiplyWhereGreater(coarseSlice.data, ch * N,
+                    coarseSlice.data, 6 * N, 1e-6f, 1.0f,
+                    condFlat, ch * N, N);
+        }
 
         // Append mask channel (all ones = (1 - mean) / std normalized)
         float[] condImg7 = new float[7 * N];
@@ -332,11 +340,10 @@ public final class WorldPipeline implements AutoCloseable {
         for (int px = 0; px < N; px++) condImg7[6 * N + px] = maskNorm;
 
         // Normalize all 7 channels
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < N; px++) {
-                float v = (condFlat[ch * N + px] - COND_MEANS[ch]) / COND_STDS[ch];
-                condImg7[ch * N + px] = Float.isNaN(v) ? 0f : v;
-            }
+        for (int ch = 0; ch < 6; ch++) {
+            VectorMath.normalizeNaNToZero(condFlat, ch * N, COND_MEANS[ch], COND_STDS[ch],
+                    condImg7, ch * N, N);
+        }
 
         // Extract components
         float[] meansCrop    = new float[16]; System.arraycopy(condImg7, 0,      meansCrop, 0, 16);
@@ -377,51 +384,66 @@ public final class WorldPipeline implements AutoCloseable {
         float[] ww = linearWeightWindow(S);
         float t = (float) Math.atan(EDMScheduler.SIGMA_MAX / SIGMA_DATA);
 
-        return tileStore.getOrCreate("init_residual_map", new Integer[]{2, null, null},
-                (wi, args) -> decoderTile(wi, args.get(0), t, ww),
-                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin}, cacheLimitBytes);
+        return tileStore.getOrCreateBatched("init_residual_map", new Integer[]{2, null, null},
+                (wis, args) -> decoderBatch(wis, args.get(0), t, ww),
+                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin}, cacheLimitBytes, 2);
     }
 
-    private FloatTensor decoderTile(int[] wi, FloatTensor latentSlice, float t, float[] ww) {
+    private List<FloatTensor> decoderBatch(List<int[]> wis, List<FloatTensor> latentSlices,
+                                           float t, float[] ww) {
         int S = DECODER_TILE_SIZE, ST = DECODER_TILE_STRIDE, lc = LATENT_COMPRESSION;
         int Slc = S / lc;
-        int i1 = wi[1] * ST, j1 = wi[2] * ST;
+        int batch = wis.size();
         float cosT = (float) Math.cos(t), sinT = (float) Math.sin(t);
+        float[][] xTArr = new float[batch][];
+        float[] modelInBatch = new float[batch * 5 * S * S];
 
-        // Unnormalize latents channels 0..3 (4 channels)
-        float[] latFlat = new float[4 * Slc * Slc];
-        for (int ch = 0; ch < 4; ch++)
-            for (int px = 0; px < Slc * Slc; px++) {
-                float w = latentSlice.data[5 * Slc * Slc + px];
-                latFlat[ch * Slc * Slc + px] = (w > 1e-6f) ? latentSlice.data[ch * Slc * Slc + px] / w : 0f;
+        for (int b = 0; b < batch; b++) {
+            int[] wi = wis.get(b);
+            FloatTensor latentSlice = latentSlices.get(b);
+            int i1 = wi[1] * ST, j1 = wi[2] * ST;
+
+            // Unnormalize latents channels 0..3 (4 channels)
+            float[] latFlat = new float[4 * Slc * Slc];
+            for (int ch = 0; ch < 4; ch++) {
+                VectorMath.divideMultiplyWhereGreater(latentSlice.data, ch * Slc * Slc,
+                        latentSlice.data, 5 * Slc * Slc, 1e-6f, 1.0f,
+                        latFlat, ch * Slc * Slc, Slc * Slc);
             }
 
-        // Nearest-neighbor upsample (4, Slc, Slc) → (4, S, S)
-        float[] upsampled = nearestUpsample(latFlat, 4, Slc, Slc, S, S);
+            // Nearest-neighbor upsample (4, Slc, Slc) → (4, S, S)
+            float[] upsampled = nearestUpsample(latFlat, 4, Slc, Slc, S, S);
 
-        // One flow-matching step (sample starts at zero)
-        float[] noise = flatten3D(GaussianNoisePatch.generate(seed + 5819, i1, j1, S, S, 1, S, S));
-        float[] xT = new float[S * S];
-        for (int k = 0; k < S * S; k++) xT[k] = sinT * noise[k] * SIGMA_DATA;  // sample=0
+            // One flow-matching step (sample starts at zero)
+            float[] noise = flatten3D(GaussianNoisePatch.generate(seed + 5819, i1, j1, S, S, 1, S, S));
+            float[] xT = new float[S * S];
+            int modelOffset = b * 5 * S * S;
+            VectorMath.scaleTwice(noise, 0, sinT, SIGMA_DATA, xT, 0, S * S);
+            VectorMath.divide(xT, 0, SIGMA_DATA, modelInBatch, modelOffset, S * S);
+            xTArr[b] = xT;
+            System.arraycopy(upsampled, 0, modelInBatch, modelOffset + S * S, 4 * S * S);
+        }
 
-        // model_in = concat([xT/sigma_data (1,S,S), upsampled (4,S,S)]) → (5,S,S)
-        float[] modelIn = new float[5 * S * S];
-        for (int k = 0; k < S * S; k++) modelIn[k] = xT[k] / SIGMA_DATA;
-        System.arraycopy(upsampled, 0, modelIn, S * S, 4 * S * S);
-
-        LOG.debug("Decoder model called for chunk ({}, {}) tile pixels [{}, {}]-[{}, {}]", wi[1], wi[2], i1, j1, i1 + S, j1 + S);
-        float[] rawPred = decoderModel.runModel(modelIn, new long[]{1, 5, S, S}, new float[]{t}, null, null);
+        String chunkList = wis.stream().map(w -> "(" + w[1] + "," + w[2] + ")").collect(Collectors.joining(", "));
+        LOG.debug("Decoder model called for {} chunks: {}", batch, chunkList);
+        float[] noiseLabels = new float[batch];
+        for (int b = 0; b < batch; b++) noiseLabels[b] = t;
+        float[] rawPred = decoderModel.runModel(
+                modelInBatch, new long[]{batch, 5, S, S}, noiseLabels, null, null);
 
         // sample = cos(t)*xT - sin(t)*sigma_data*(-rawPred); then / sigma_data
-        float[] newSample = new float[S * S];
-        for (int k = 0; k < S * S; k++) {
-            float pred = -rawPred[k];  // decoder model output is negated
-            newSample[k] = (cosT * xT[k] - sinT * SIGMA_DATA * pred) / SIGMA_DATA;
+        List<FloatTensor> results = new ArrayList<>(batch);
+        for (int b = 0; b < batch; b++) {
+            float[] xT = xTArr[b];
+            FloatTensor result = new FloatTensor(new int[]{2, S, S});
+            float[] newSample = new float[S * S];
+            VectorMath.flowDenoise(xT, 0, rawPred, b * S * S,
+                    cosT, sinT * SIGMA_DATA, SIGMA_DATA, newSample, 0, S * S);
+            VectorMath.multiply(newSample, 0, ww, 0, result.data, 0, S * S);
+            System.arraycopy(ww, 0, result.data, S * S, S * S);
+            results.add(result);
         }
-        FloatTensor result = new FloatTensor(new int[]{2, S, S});
-        for (int px = 0; px < S * S; px++) result.data[px] = newSample[px] * ww[px];
-        System.arraycopy(ww, 0, result.data, S * S, S * S);
-        return result;
+        return results;
     }
 
     // =========================================================================
@@ -480,24 +502,22 @@ public final class WorldPipeline implements AutoCloseable {
         // Residual slice (2, pH, pW)
         FloatTensor resSlice = residual.getSlice(new int[]{0, pi1, pj1}, new int[]{2, pi2, pj2});
         float[][] residualP = new float[pH][pW];
-        for (int r = 0; r < pH; r++)
-            for (int c = 0; c < pW; c++) {
-                float w = resSlice.data[pH * pW + r * pW + c];
-                float v = (w > 1e-6f) ? resSlice.data[r * pW + c] / w : 0f;
-                residualP[r][c] = v * RESIDUAL_STD + RESIDUAL_MEAN;
-            }
+        for (int r = 0; r < pH; r++) {
+            VectorMath.divideAffineWhereGreater(resSlice.data, r * pW,
+                    resSlice.data, pH * pW + r * pW, 1e-6f,
+                    RESIDUAL_STD, RESIDUAL_MEAN, residualP[r], 0, pW);
+        }
 
         // Latent slice (6, lH, lW)
         int lH = pH / lc, lW = pW / lc;
         FloatTensor latSlice = latents.getSlice(
                 new int[]{0, pi1 / lc, pj1 / lc}, new int[]{6, pi2 / lc, pj2 / lc});
         float[][] lowfreqP = new float[lH][lW];
-        for (int r = 0; r < lH; r++)
-            for (int c = 0; c < lW; c++) {
-                float w = latSlice.data[5 * lH * lW + r * lW + c];
-                float v = (w > 1e-6f) ? latSlice.data[4 * lH * lW + r * lW + c] / w : 0f;
-                lowfreqP[r][c] = v * LOWFREQ_STD + LOWFREQ_MEAN;
-            }
+        for (int r = 0; r < lH; r++) {
+            VectorMath.divideAffineWhereGreater(latSlice.data, 4 * lH * lW + r * lW,
+                    latSlice.data, 5 * lH * lW + r * lW, 1e-6f,
+                    LOWFREQ_STD, LOWFREQ_MEAN, lowfreqP[r], 0, lW);
+        }
 
         float[][] newLowres = LaplacianUtils.laplacianDenoise(residualP, lowfreqP, sigma);
         float[][] elevP = LaplacianUtils.laplacianDecode(residualP, newLowres);
@@ -535,11 +555,11 @@ public final class WorldPipeline implements AutoCloseable {
 
         // Unnormalize all 6 coarse channels
         float[][] coarseMap = new float[6][cH * cW];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < cH * cW; px++) {
-                float w = coarseSlice.data[6 * cH * cW + px];
-                coarseMap[ch][px] = (w > 1e-6f) ? coarseSlice.data[ch * cH * cW + px] / w : 0f;
-            }
+        for (int ch = 0; ch < 6; ch++) {
+            VectorMath.divideMultiplyWhereGreater(coarseSlice.data, ch * cH * cW,
+                    coarseSlice.data, 6 * cH * cW, 1e-6f, 1.0f,
+                    coarseMap[ch], 0, cH * cW);
+        }
 
         // Coarse elevation (undo sqrt): max(0, v)^2  — ocean pixels clamp to 0, matching Python
         float[] coarseElev = new float[cH * cW];
@@ -613,8 +633,8 @@ public final class WorldPipeline implements AutoCloseable {
     }
 
     static int appendScaled(float[] out, int off, float[] arr, float scale) {
-        for (float v : arr) out[off++] = v * scale;
-        return off;
+        VectorMath.scale(arr, 0, scale, out, off, arr.length);
+        return off + arr.length;
     }
 
     static float[] nearestUpsample(float[] src, int C, int sH, int sW, int dH, int dW) {

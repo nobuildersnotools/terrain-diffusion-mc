@@ -86,11 +86,15 @@ public final class PipelineBenchmark {
         int i1 = Math.toIntExact(coordinate);
         int j1 = Math.toIntExact(coordinate + 100_000L);
         float[][] result = pipeline.get(i1, j1, i1 + options.regionSize, j1 + options.regionSize, options.withClimate);
-        // Read values so benchmark results cannot be optimized into an unused computation.
-        double checksum = result[0][0] + result[0][result[0].length - 1];
-        if (result[1] != null) {
-            checksum += result[1][0] + result[1][result[1].length - 1];
-        }
+        // Read every value so the checksum also detects output changes between benchmark runs.
+        double checksum = checksum(result[0]);
+        if (result[1] != null) checksum += checksum(result[1]);
+        return checksum;
+    }
+
+    private static double checksum(float[] values) {
+        double checksum = 0.0;
+        for (int i = 0; i < values.length; i++) checksum += values[i] * (i % 1021 + 1);
         return checksum;
     }
 

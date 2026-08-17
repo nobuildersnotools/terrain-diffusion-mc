@@ -41,14 +41,21 @@ public final class ModelAssetManager {
     private static final Logger LOG = LoggerFactory.getLogger(ModelAssetManager.class);
     private static final String MANIFEST_RESOURCE_PATH = "/model-assets-manifest.json";
     private static final long PROGRESS_LOG_THRESHOLD_BYTES = 100L * 1024L * 1024L;
-    private static final Path MODEL_DIRECTORY = FabricLoader.getInstance()
-            .getGameDir()
-            .resolve("terrain-diffusion-models");
+    private static final Path MODEL_DIRECTORY = resolveModelDirectory();
     private static final AtomicBoolean READY = new AtomicBoolean(false);
     private static final Gson GSON = new Gson();
     private static final Type MANIFEST_TYPE = new TypeToken<ModelAssetManifest>() {}.getType();
+    private static volatile ModelAssetManifest loadedManifest;
 
     private ModelAssetManager() {
+    }
+
+    private static Path resolveModelDirectory() {
+        String override = System.getProperty("terrain-diffusion.models-dir");
+        if (override != null && !override.isBlank()) {
+            return Path.of(override).toAbsolutePath();
+        }
+        return FabricLoader.getInstance().getGameDir().resolve("terrain-diffusion-models");
     }
 
     /**
@@ -65,6 +72,7 @@ public final class ModelAssetManager {
             try {
                 Files.createDirectories(MODEL_DIRECTORY);
                 ModelAssetManifest manifest = loadManifest();
+                loadedManifest = manifest;
                 String offlineHelpUrl = buildOfflineHelpUrl(manifest);
                 boolean shouldValidatePreExistingModels = TerrainDiffusionConfig.validateModel();
                 LOG.info("Preparing terrain diffusion model assets in {}", MODEL_DIRECTORY);
@@ -89,6 +97,14 @@ public final class ModelAssetManager {
      */
     public static Path resolveAssetPath(String fileName) {
         return MODEL_DIRECTORY.resolve(fileName);
+    }
+
+    /** Returns the manifest hash when this process validated the asset, otherwise null. */
+    static String getValidatedAssetSha256(String fileName) {
+        ModelAssetManifest manifest = loadedManifest;
+        if (!READY.get() || !TerrainDiffusionConfig.validateModel() || manifest == null) return null;
+        ManifestAsset asset = manifest.assets.get(fileName);
+        return asset == null ? null : asset.sha256;
     }
 
     private static void ensureSingleAsset(
