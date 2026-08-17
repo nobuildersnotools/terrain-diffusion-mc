@@ -22,7 +22,8 @@ Use the `-cuda` build only if you are on Linux, or have an NVIDIA GPU and prefer
 
 ## Requirements
 
-- Minecraft with [Fabric](https://fabricmc.net/) and the [Fabric API Mod](https://modrinth.com/mod/fabric-api) installed
+- Minecraft 26.1.2 with [Fabric](https://fabricmc.net/) and the [Fabric API Mod](https://modrinth.com/mod/fabric-api) installed
+- Java 25 or newer
 - Windows with a GPU OR Linux with an NVIDIA GPU is strongly recommended. CPU inference works but is very slow.
 - VRAM (GPU RAM) needed: 1.5GB
 - RAM needed: 2.5GB (May need to increase Minecraft's RAM allocation)
@@ -91,7 +92,7 @@ This value is saved with the world save and affects:
 
 **A dynamic link library (DLL) initialization routine failed**
 
-This can happen for some older Java versions. Please update to the most recent version of Java 21 or higher. The [latest Microsoft OpenJDK 21](https://learn.microsoft.com/en-us/java/openjdk/download) version is known to work.
+This can happen for some older Java versions. Please update to Java 25 or newer. The [Microsoft OpenJDK downloads](https://learn.microsoft.com/en-us/java/openjdk/download) include supported builds.
 
 **LoadLibrary failed with error 126** *(CUDA build only)*
 

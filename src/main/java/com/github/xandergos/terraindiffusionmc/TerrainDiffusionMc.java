@@ -11,20 +11,20 @@ import com.mojang.brigadier.context.CommandContext;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
-import java.net.URI;
-import net.minecraft.util.Identifier;
-import net.minecraft.world.World;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLevelEvents;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.net.URI;
 
-import static net.minecraft.server.command.CommandManager.literal;
+import static net.minecraft.commands.Commands.literal;
 
 public class TerrainDiffusionMc implements ModInitializer {
     public static final String MOD_ID = "terrain-diffusion-mc";
@@ -33,16 +33,16 @@ public class TerrainDiffusionMc implements ModInitializer {
     @Override
     public void onInitialize() {
         LOG.info("Initializing terrain-diffusion-mc");
-        Registry.register(Registries.BIOME_SOURCE, Identifier.of(MOD_ID, "terrain_diffusion"), TerrainDiffusionBiomeSource.CODEC);
-        Registry.register(Registries.DENSITY_FUNCTION_TYPE, Identifier.of(MOD_ID, "terrain_diffusion"), TerrainDiffusionDensityFunction.CODEC);
+        Registry.register(BuiltInRegistries.BIOME_SOURCE, Identifier.fromNamespaceAndPath(MOD_ID, "terrain_diffusion"), TerrainDiffusionBiomeSource.CODEC);
+        Registry.register(BuiltInRegistries.DENSITY_FUNCTION_TYPE, Identifier.fromNamespaceAndPath(MOD_ID, "terrain_diffusion"), TerrainDiffusionDensityFunction.CODEC);
 
         ModelAssetManager.ensureAssetsReady();
         PipelineModels.load();
 
         ServerLifecycleEvents.SERVER_STARTING.register(server -> LocalTerrainProvider.clearCache());
 
-        ServerWorldEvents.LOAD.register((server, world) -> {
-            if (world.getRegistryKey() == World.OVERWORLD) {
+        ServerLevelEvents.LOAD.register((server, world) -> {
+            if (world.dimension() == Level.OVERWORLD) {
                 WorldScaleManager.initializeForWorld(world);
                 LocalTerrainProvider.init(world.getSeed());
             }
@@ -55,19 +55,19 @@ public class TerrainDiffusionMc implements ModInitializer {
         );
     }
 
-    private static int executeExplore(CommandContext<ServerCommandSource> ctx) {
+    private static int executeExplore(CommandContext<CommandSourceStack> ctx) {
         try {
             int port = ExplorerServer.startIfNotRunning();
             String url = "http://localhost:" + port;
-            MutableText link = Text.literal(url)
-                    .styled(s -> s.withClickEvent(new ClickEvent.OpenUrl(URI.create(url)))
-                                  .withUnderline(true));
-            ctx.getSource().sendFeedback(
-                    () -> Text.literal("Terrain Explorer: ").append(link),
+            MutableComponent link = Component.literal(url)
+                    .withStyle(s -> s.withClickEvent(new ClickEvent.OpenUrl(URI.create(url)))
+                                  .withUnderlined(true));
+            ctx.getSource().sendSuccess(
+                    () -> Component.literal("Terrain Explorer: ").append(link),
                     false);
         } catch (Exception e) {
             LOG.error("Failed to start terrain explorer", e);
-            ctx.getSource().sendError(Text.literal("Failed to start terrain explorer: " + e.getMessage()));
+            ctx.getSource().sendFailure(Component.literal("Failed to start terrain explorer: " + e.getMessage()));
         }
         return 1;
     }

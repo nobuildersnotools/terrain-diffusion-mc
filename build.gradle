@@ -1,5 +1,5 @@
 plugins {
-    id 'fabric-loom' version '1.13-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
     id 'maven-publish'
 }
 
@@ -66,10 +66,9 @@ repositories {
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
     if (useCuda) {
         implementation "com.microsoft.onnxruntime:onnxruntime_gpu:1.20.0"
@@ -78,8 +77,8 @@ dependencies {
         implementation "com.microsoft.onnxruntime:onnxruntime:1.20.0"
         include "com.microsoft.onnxruntime:onnxruntime:1.20.0"
     } else if (useDml) {
-        implementation 'com.microsoft.onnxruntime:onnxruntime-dml:1.0'
-        include 'com.microsoft.onnxruntime:onnxruntime-dml:1.0'
+        implementation 'com.microsoft.onnxruntime:onnxruntime-dml:1.0.0'
+        include 'com.microsoft.onnxruntime:onnxruntime-dml:1.0.0'
     }
 }
 
@@ -88,6 +87,7 @@ processResources {
     inputs.property "version", project.version
     inputs.property "minecraft_version", project.minecraft_version
     inputs.property "loader_version", project.loader_version
+    inputs.property "fabric_version", project.fabric_version
     inputs.property "build_variant", buildVariant
     filteringCharset "UTF-8"
     from(generatedManifestFile) {
@@ -97,14 +97,15 @@ processResources {
     filesMatching("fabric.mod.json") {
         expand "version": project.version,
                 "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
+                "loader_version": project.loader_version,
+                "fabric_version": project.fabric_version
     }
     filesMatching("build-variant.properties") {
         expand "build_variant": buildVariant
     }
 }
 
-def targetJavaVersion = 21
+def targetJavaVersion = 25
 tasks.withType(JavaCompile).configureEach {
     // ensure that the encoding is set to UTF-8, no matter what the system default is
     // this fixes some edge cases with special characters not displaying correctly
@@ -121,7 +122,7 @@ java {
     sourceCompatibility = javaVersion
     targetCompatibility = javaVersion
     // Only use toolchain if current Java version is less than target
-    // Commented out toolchain to avoid detection issues when Java 21 is already installed
+    // Commented out toolchain to avoid detection issues when Java 25 is already installed
     // if (JavaVersion.current() < javaVersion) {
     //     toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
     // }

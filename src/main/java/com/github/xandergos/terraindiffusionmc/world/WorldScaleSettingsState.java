@@ -2,15 +2,16 @@ package com.github.xandergos.terraindiffusionmc.world;
 
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
+import net.minecraft.resources.Identifier;
+import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 
 /**
  * Persisted per-world settings for terrain diffusion.
  *
  * <p>This is stored in the world save via Minecraft's persistent state manager.
  */
-public final class WorldScaleSettingsState extends PersistentState {
+public final class WorldScaleSettingsState extends SavedData {
     private static final Codec<WorldScaleSettingsState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
             Codec.INT.optionalFieldOf("scale", WorldScaleManager.DEFAULT_SCALE).forGetter(WorldScaleSettingsState::getScale),
             Codec.BOOL.optionalFieldOf("explicit_scale", false).forGetter(WorldScaleSettingsState::hasExplicitScale)
@@ -34,8 +35,10 @@ public final class WorldScaleSettingsState extends PersistentState {
     /**
      * Type descriptor used by the persistent state manager.
      */
-    public static final PersistentStateType<WorldScaleSettingsState> TYPE =
-            new PersistentStateType<>("terrain_diffusion_world_settings", WorldScaleSettingsState::createDefault, CODEC, null);
+    public static final SavedDataType<WorldScaleSettingsState> TYPE =
+            new SavedDataType<>(
+                    Identifier.fromNamespaceAndPath("terrain-diffusion-mc", "terrain_diffusion_world_settings"),
+                    WorldScaleSettingsState::createDefault, CODEC, null);
 
     /**
      * Returns the currently persisted world scale.
@@ -57,6 +60,6 @@ public final class WorldScaleSettingsState extends PersistentState {
     public void setScale(int configuredScale) {
         this.scale = WorldScaleManager.clampScale(configuredScale);
         this.explicitScale = true;
-        markDirty();
+        setDirty();
     }
 }
