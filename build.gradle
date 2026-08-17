@@ -11,6 +11,7 @@ def useCuda = project.hasProperty('useCuda') && project.property('useCuda').toSt
 def useDml = project.hasProperty('useDml') && project.property('useDml').toString().toLowerCase() == 'true'
 def useCpu = project.hasProperty('useCpu') && project.property('useCpu').toString().toLowerCase() == 'true'
 def withSourcesJar = project.hasProperty('withSourcesJar') && project.property('withSourcesJar').toString().toLowerCase() == 'true'
+def onnxRuntimeVersion = project.findProperty('onnxRuntimeVersion') ?: '1.20.0'
 
 if ([useCuda, useDml, useCpu].count { it } > 1) {
     throw new GradleException("Only one of -PuseCuda, -PuseDml, or -PuseCpu may be specified at a time.")
@@ -72,11 +73,11 @@ dependencies {
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
     if (useCuda) {
-        implementation "com.microsoft.onnxruntime:onnxruntime_gpu:1.20.0"
-        include "com.microsoft.onnxruntime:onnxruntime_gpu:1.20.0"
+        implementation "com.microsoft.onnxruntime:onnxruntime_gpu:${onnxRuntimeVersion}"
+        include "com.microsoft.onnxruntime:onnxruntime_gpu:${onnxRuntimeVersion}"
     } else if (useCpu) {
-        implementation "com.microsoft.onnxruntime:onnxruntime:1.20.0"
-        include "com.microsoft.onnxruntime:onnxruntime:1.20.0"
+        implementation "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeVersion}"
+        include "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeVersion}"
     } else if (useDml) {
         implementation 'com.microsoft.onnxruntime:onnxruntime-dml:1.0.0'
         include 'com.microsoft.onnxruntime:onnxruntime-dml:1.0.0'
@@ -143,6 +144,17 @@ jar {
 tasks.withType(JavaExec).configureEach {
     jvmArgs '--add-modules=jdk.incubator.vector'
     systemProperty 'log4j2.configurationFile', rootProject.file('log4j2-dev.xml').absolutePath
+    [
+            'terrain-diffusion.onnx.intra-threads',
+            'terrain-diffusion.onnx.inter-threads',
+            'terrain-diffusion.onnx.execution-mode',
+            'terrain-diffusion.onnx.memory-pattern',
+            'terrain-diffusion.onnx.cpu-arena',
+            'terrain-diffusion.onnx.profile-dir'
+    ].each { propertyName ->
+        def propertyValue = System.getProperty(propertyName)
+        if (propertyValue != null) systemProperty propertyName, propertyValue
+    }
 }
 
 tasks.withType(Test).configureEach {

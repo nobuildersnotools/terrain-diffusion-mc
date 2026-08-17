@@ -64,6 +64,10 @@ Edit `config/terrain-diffusion-mc.properties` (created automatically on first la
 # CPU build defaults to "auto": uses CoreML on macOS, otherwise CPU.
 inference.device=gpu
 
+# CPU inference worker threads. Six is tuned for a 6-core Ryzen 5 9600X;
+# use 0 to restore ONNX Runtime's machine-dependent default.
+inference.cpu_threads=6
+
 # Offload inactive models from VRAM between pipeline stages.
 # Keeps peak VRAM to ~1.5-2 GB. Set to false if you have ~2.5+ GB free for slightly
 # faster generation.
@@ -155,6 +159,10 @@ Build all:
 ```
 
 Supported backends are `cpu`, `cuda`, `directml` (or `dml`), `coreml`, `gpu`, and `auto`. Specific GPU backends fail if unavailable; `gpu` picks the first available GPU backend and `auto` may fall back to CPU. Optional properties are `benchmarkWarmup`, `benchmarkRegionSize`, `benchmarkSeed`, `benchmarkClimate`, `benchmarkOutput` (a JSON report path), and `benchmarkHelp=true`.
+
+CPU inference uses `inference.cpu_threads` from the normal configuration. For one-off benchmark experiments, `-Dterrain-diffusion.onnx.intra-threads=N` overrides it. Other diagnostic overrides are `terrain-diffusion.onnx.execution-mode` (`sequential` or `parallel`), `terrain-diffusion.onnx.inter-threads`, `terrain-diffusion.onnx.memory-pattern`, and `terrain-diffusion.onnx.cpu-arena`. To capture ONNX Runtime profiles, add `-Dterrain-diffusion.onnx.profile-dir=/path/to/profiles`.
+
+The first model load creates fully optimized ONNX graphs in the local model cache, keyed by ONNX Runtime version, provider, and CPU architecture. Later loads skip graph optimization. CPU and CUDA builds remain pinned to ONNX Runtime 1.20.0 for reproducible terrain output; another version can be tested without changing the build using `-PonnxRuntimeVersion=VERSION`. The DirectML build uses the bundled custom runtime instead.
 
 ### Building onnxruntime with DirectML
 

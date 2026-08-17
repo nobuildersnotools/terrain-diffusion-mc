@@ -15,6 +15,7 @@ public final class TerrainDiffusionConfig {
     private static final String BUILD_VARIANT = readBuildVariant();
     private static final boolean DEFAULT_OFFLOAD_MODELS = true;
     private static final boolean DEFAULT_VALIDATE_MODEL = true;
+    private static final int DEFAULT_CPU_INFERENCE_THREADS = 6;
     private static final int DEFAULT_EXPLORER_PORT = 19801;
     private static final int DEFAULT_TILE_SIZE = 256;
 
@@ -70,6 +71,17 @@ public final class TerrainDiffusionConfig {
     /** Whether to offload inactive models from VRAM between pipeline stages. */
     public static boolean offloadModels() {
         return readBoolean("inference.offload_models", DEFAULT_OFFLOAD_MODELS);
+    }
+
+    /** ONNX Runtime intra-op threads for the CPU provider. Zero selects its runtime default. */
+    public static int cpuInferenceThreads() {
+        int configuredThreads = readInt("inference.cpu_threads", DEFAULT_CPU_INFERENCE_THREADS);
+        if (configuredThreads < 0) {
+            System.err.println("Invalid inference.cpu_threads: " + configuredThreads
+                    + ", using default " + DEFAULT_CPU_INFERENCE_THREADS);
+            return DEFAULT_CPU_INFERENCE_THREADS;
+        }
+        return configuredThreads;
     }
 
     /** TCP port for the local terrain explorer HTTP server. */
